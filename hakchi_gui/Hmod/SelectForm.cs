@@ -265,8 +265,7 @@ namespace com.clusterrr.hakchi_gui.Hmod
                 Hmod selectedHmod = (Hmod)(listViewHmods.SelectedItems[0].Tag);
                 if (selectedHmod.PresentInUserMods())
                 {
-                    string args = $"/select, \"{selectedHmod.HmodPath}\"";
-                    Process.Start("explorer.exe", args);
+                    Shared.RevealInFileManager(selectedHmod.HmodPath);
                 }
             }
         }

@@ -2,6 +2,7 @@
 using Renci.SshNet;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Diagnostics;
 using System.IO;
 using System.Net.NetworkInformation;
@@ -13,6 +14,8 @@ namespace com.clusterrr.ssh
     public class SshClientWrapper : ISystemShell, INetworkShell
     {
         public const ushort DEFAULT_SSH_PORT = 22;
+        // Address hakchi's boot scripts give the console's USB network gadget (rndis0).
+        public const string DEFAULT_USB_LINK_ADDRESS = "169.254.13.37";
 
         public event OnConnectedEventHandler OnConnected = delegate { };
         public event OnDisconnectedEventHandler OnDisconnected = delegate { };
@@ -47,6 +50,7 @@ namespace com.clusterrr.ssh
                         listeners = new List<IListener>();
                         listeners.Add(new MdnsListener(serviceName, serviceType));
                         listeners.Add(new DnsListener(serviceName));
+                        listeners.Add(new UsbLinkListener(DEFAULT_USB_LINK_ADDRESS, DEFAULT_SSH_PORT));
                     }
 
                     // start connection watching thread
@@ -230,9 +234,10 @@ namespace com.clusterrr.ssh
         {
             foreach (IListener l in listeners)
             {
-                foreach (var dev in l.Available)
+                // Snapshot: the mDNS listener updates its list from its own thread.
+                foreach (var dev in l.Available.ToArray())
                 {
-                    foreach (var a in dev.Addresses)
+                    foreach (var a in dev.Addresses.ToArray())
                     {
                         Trace.WriteLine($"Attempting to connect to {a}...");
                         IPAddress = a.ToString();

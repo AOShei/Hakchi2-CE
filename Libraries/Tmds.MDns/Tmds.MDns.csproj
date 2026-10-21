@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Vendored from https://github.com/tmds/Tmds.MDns (v0.10.1, MIT license, see LICENSE).
+    Carries a small fix in NetworkInterfaceHandler.cs so that service discovery does not
+    abort on Mono, whose GetIPv6Properties() throws NotImplementedException.
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <RootNamespace>Tmds.MDns</RootNamespace>
+    <AssemblyName>Tmds.MDns</AssemblyName>
+    <Version>0.10.1</Version>
+    <Description>This library allows to find services announced via multicast DNS (RFC6762 and RFC6763).</Description>
+    <Authors>Tom Deseyn</Authors>
+    <Copyright>Tom Deseyn</Copyright>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+</Project>

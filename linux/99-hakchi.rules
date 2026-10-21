@@ -1,0 +1,19 @@
+# udev rules for hakchi2 CE on Linux.
+#
+# 1. Grants ordinary users access to the NES/SNES/Mega Drive Classic Mini over
+#    USB, both in Allwinner FEL mode (first install / recovery) and for the
+#    legacy clovershell protocol. Both use USB ID 1f3a:efe8.
+# 2. Gives the console's USB network gadget (what it becomes once hakchi is
+#    installed or membooted: USB ID 04e8:6863, manufacturer "hakchi") the fixed
+#    interface name "hakchi0", so the NetworkManager profile in
+#    hakchi-usb.nmconnection can configure it with a link-local address. The
+#    console itself sits at 169.254.13.37 and runs no DHCP server, so plain
+#    DHCP on that interface never completes.
+#
+# Install with:
+#   sudo ./install-system.sh
+# or by hand:
+#   sudo cp 99-hakchi.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger
+SUBSYSTEM=="usb", ATTR{idVendor}=="1f3a", ATTR{idProduct}=="efe8", MODE="0666", TAG+="uaccess"
+SUBSYSTEM=="net", ACTION=="add", ATTRS{idVendor}=="04e8", ATTRS{idProduct}=="6863", ATTRS{manufacturer}=="hakchi", NAME="hakchi0"

@@ -116,21 +116,24 @@ namespace com.clusterrr.hakchi_gui
             if (Debugger.IsAttached || Array.IndexOf(args, "/debug") != -1)
 #endif
             {
-                try
+                if (Shared.isWindows) // elsewhere stdout already is a console, and a trace listener is attached above
                 {
-                    AllocConsole();
-                    IntPtr stdHandle = CreateFile("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, 0, OPEN_EXISTING, 0, 0);
-                    SafeFileHandle safeFileHandle = new SafeFileHandle(stdHandle, true);
-                    FileStream consoleFileStream = new FileStream(safeFileHandle, FileAccess.Write);
-                    Encoding encoding = System.Text.Encoding.GetEncoding(MY_CODE_PAGE);
-                    StreamWriter standardOutput = new StreamWriter(consoleFileStream, encoding);
-                    standardOutput.AutoFlush = true;
-                    Console.SetOut(standardOutput);
-                    debugStreams.Add(consoleFileStream);
-                    Trace.Listeners.Add(new TextWriterTraceListener(System.Console.Out));
-                    ConsoleVisible = true;
+                    try
+                    {
+                        AllocConsole();
+                        IntPtr stdHandle = CreateFile("CONOUT$", GENERIC_WRITE, FILE_SHARE_WRITE, 0, OPEN_EXISTING, 0, 0);
+                        SafeFileHandle safeFileHandle = new SafeFileHandle(stdHandle, true);
+                        FileStream consoleFileStream = new FileStream(safeFileHandle, FileAccess.Write);
+                        Encoding encoding = System.Text.Encoding.GetEncoding(MY_CODE_PAGE);
+                        StreamWriter standardOutput = new StreamWriter(consoleFileStream, encoding);
+                        standardOutput.AutoFlush = true;
+                        Console.SetOut(standardOutput);
+                        debugStreams.Add(consoleFileStream);
+                        Trace.Listeners.Add(new TextWriterTraceListener(System.Console.Out));
+                        ConsoleVisible = true;
+                    }
+                    catch { }
                 }
-                catch { }
                 try
                 {
                     Stream logFile = File.Create("debuglog.txt");
@@ -288,8 +291,11 @@ namespace com.clusterrr.hakchi_gui
                         {
                             if (process.Id != current.Id)
                             {
-                                ShowWindow(process.MainWindowHandle, 9); // Restore
-                                SetForegroundWindow(process.MainWindowHandle); // Foreground
+                                if (Shared.isWindows)
+                                {
+                                    ShowWindow(process.MainWindowHandle, 9); // Restore
+                                    SetForegroundWindow(process.MainWindowHandle); // Foreground
+                                }
                                 break;
                             }
                         }

@@ -9,7 +9,7 @@ downloadedFiles="$(cat "$downloadedFileListName")"
 
 download(){
   mkdir -p "`dirname "$2"`"
-  [ "$(echo "$downloadedFiles" | grep -x "$2 $1")" == "" ] && [ -f "$2" ] && rm "$2"
+  [ "$(echo "$downloadedFiles" | grep -x "$2 $1")" = "" ] && [ -f "$2" ] && rm "$2"
   echo "Downloading $2 from $1"
   $pwd/wget.exe -N -S "$1" -O "$2" 2>/dev/null || wget -N -S "$1" -O "$2" 2>/dev/null || return 1
   echo "$2 $1" >> "$downloadedFileListName"

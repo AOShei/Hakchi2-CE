@@ -1,6 +1,8 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using Tmds.MDns;
 
 namespace com.clusterrr.ssh
@@ -15,6 +17,13 @@ namespace com.clusterrr.ssh
         ServiceBrowser serviceBrowser;
         string serviceName;
         string serviceType;
+        Timer refreshTimer;
+
+        // How often to re-scan network interfaces off Windows. Mono raises NetworkChange events
+        // when the console's USB network interface appears, but typically before NetworkManager
+        // has assigned it an address, so the browser records no local subnet for it and drops the
+        // console's answers. Re-scanning picks the address up a moment later.
+        const int REFRESH_INTERVAL_MS = 2000;
 
         public MdnsListener(string name, string type)
         {
@@ -27,7 +36,30 @@ namespace com.clusterrr.ssh
             serviceBrowser.ServiceAdded += onServiceAdded;
             serviceBrowser.ServiceChanged += onServiceChanged;
             serviceBrowser.ServiceRemoved += onServiceRemoved;
+            serviceBrowser.NetworkInterfaceAdded += (s, e) => Trace.WriteLine($"mDNS: watching interface {e.NetworkInterface.Name} ({describe(e.NetworkInterface)})");
+            serviceBrowser.NetworkInterfaceRemoved += (s, e) => Trace.WriteLine($"mDNS: interface {e.NetworkInterface.Name} gone");
             serviceBrowser.StartBrowse(type);
+            if (!com.clusterrr.hakchi_gui.Shared.isWindows)
+            {
+                refreshTimer = new Timer(_ =>
+                {
+                    try { serviceBrowser.RefreshNetworkInterfaces(); }
+                    catch (Exception ex) { Trace.WriteLine("mDNS: interface refresh failed: " + ex.Message); }
+                }, null, REFRESH_INTERVAL_MS, REFRESH_INTERVAL_MS);
+            }
+        }
+
+        private static string describe(System.Net.NetworkInformation.NetworkInterface ni)
+        {
+            try
+            {
+                var addrs = ni.GetIPProperties().UnicastAddresses.Select(u => u.Address.ToString());
+                return $"{ni.OperationalStatus}, {(addrs.Any() ? string.Join(", ", addrs) : "no address")}";
+            }
+            catch (Exception ex)
+            {
+                return ex.GetType().Name;
+            }
         }
 
         public void Cycle()
@@ -37,6 +69,8 @@ namespace com.clusterrr.ssh
 
         public void Dispose()
         {
+            refreshTimer?.Dispose();
+            refreshTimer = null;
             serviceBrowser.StopBrowse();
             Available.Clear();
         }

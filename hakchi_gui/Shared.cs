@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Sockets;
@@ -698,6 +699,36 @@ namespace com.clusterrr.hakchi_gui
                 output = output.Replace(c.ToString(), replacement);
             }
             return output;
+        }
+
+        /// <summary>
+        /// Opens a file, directory or URL with the desktop's default handler.
+        /// </summary>
+        public static Process OpenPath(string path)
+        {
+            if (isWindows)
+            {
+                return Process.Start(new ProcessStartInfo() { FileName = path, UseShellExecute = true });
+            }
+            else
+            {
+                return Process.Start(new ProcessStartInfo() { FileName = "xdg-open", Arguments = $"\"{path}\"", UseShellExecute = false });
+            }
+        }
+
+        /// <summary>
+        /// Shows a file in the desktop's file manager (selecting it where the platform supports that).
+        /// </summary>
+        public static void RevealInFileManager(string path)
+        {
+            if (isWindows)
+            {
+                Process.Start("explorer.exe", $"/select, \"{path}\"");
+            }
+            else
+            {
+                OpenPath(Directory.Exists(path) ? path : Path.GetDirectoryName(path));
+            }
         }
 
         private static bool _isWindows()

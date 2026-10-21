@@ -320,7 +320,7 @@ namespace com.clusterrr.hakchi_gui
 
         private void MainForm_Load(object sender, EventArgs e)
         {
-            if (ConfigIni.Instance.EnableCeUpdate)
+            if (ConfigIni.Instance.EnableCeUpdate && Shared.isWindows) // the auto-updater downloads a Windows installer
             {
                 try // wrap upgrade check in an exception check, to avoid past mistakes
                 {
@@ -3047,13 +3047,7 @@ internal static
             try
             {
                 string path = (sel[0].Tag as NesApplication).BasePath;
-                new Process()
-                {
-                    StartInfo = new ProcessStartInfo()
-                    {
-                        FileName = path
-                    }
-                }.Start();
+                Shared.OpenPath(path);
             }
             catch (Exception ex)
             {

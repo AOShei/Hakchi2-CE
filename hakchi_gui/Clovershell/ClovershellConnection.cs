@@ -184,11 +184,16 @@ namespace com.clusterrr.clovershell
 
         void mainThreadLoop()
         {
+            // A console on stock firmware exposes the clovershell USB interface but never answers.
+            // Retry slowly in that case and say so only once, instead of flooding the log every second.
+            const string stockMessage = "device exposes the clovershell USB interface but does not answer; stock firmware or no clovershell daemon";
+            bool stockWarned = false;
             try
             {
                 while (enabled)
                 {
                     online = false;
+                    int retryDelay = 1000;
                     //Trace.WriteLine("Waiting for clovershell");
                     while (enabled)
                     {
@@ -259,8 +264,16 @@ namespace com.clusterrr.clovershell
                             epReader.DataReceivedEnabled = true;
                             lastAliveTime = DateTime.Now;
                             online = true;
+                            // A stock console exposes the same USB gadget but nothing answers on it;
+                            // only report a connection once the device actually responds.
+                            if (Ping() < 0)
+                            {
+                                online = false; // never announced, so do not announce a disconnect either
+                                throw new ClovershellException(stockMessage);
+                            }
                             OnConnected(this);
-                            while (device.UsbRegistryInfo.IsAlive)
+                            // UsbRegistryInfo is null with the libusb-1.0 backend (Mono); rely on Ping() there
+                            while (device.UsbRegistryInfo == null || device.UsbRegistryInfo.IsAlive)
                             {
                                 Thread.Sleep(100);
                                 if ((IdleTime.TotalSeconds >= 10) && (Ping() < 0))
@@ -274,10 +287,23 @@ namespace com.clusterrr.clovershell
                         }
                         catch (ClovershellException ex)
                         {
-                            Trace.WriteLine(ex.Message + ex.StackTrace);
+                            if (ex.Message == stockMessage)
+                            {
+                                retryDelay = 10000;
+                                if (!stockWarned)
+                                {
+                                    Trace.WriteLine(ex.Message + " (will keep checking quietly every 10 s)");
+                                    stockWarned = true;
+                                }
+                            }
+                            else
+                            {
+                                Trace.WriteLine(ex.Message + ex.StackTrace);
+                            }
                             break;
                         }
                     }
+                    if (device == null) stockWarned = false;
                     if (online)
                     {
                         dropAll();
@@ -295,7 +321,7 @@ namespace com.clusterrr.clovershell
                         epWriter.Dispose();
                     epWriter = null;
                     if (!autoreconnect) Enabled = false;
-                    Thread.Sleep(1000);
+                    Thread.Sleep(retryDelay);
                 }
             }
             catch (ThreadAbortException)
@@ -439,8 +465,11 @@ namespace com.clusterrr.clovershell
                     len -= tLen;
                     if (res != ErrorCode.Ok)
                     {
-                        if (repeats >= 10) break;
-                        //Trace.WriteLine("write error: " + res);
+                        if (repeats >= 10)
+                        {
+                            Trace.WriteLine("write error: " + res + " (" + UsbDevice.LastErrorString + ")");
+                            break;
+                        }
                         repeats++;
                         Thread.Sleep(100);
                     }

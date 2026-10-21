@@ -130,14 +130,7 @@ namespace com.clusterrr.hakchi_gui
         {
             var screenshotPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".png");
             SaveScreenshot(screenshotPath);
-            var showProcess = new Process()
-            {
-                StartInfo = new ProcessStartInfo()
-                {
-                    FileName = screenshotPath
-                }
-            };
-            showProcess.Start();
+            var showProcess = Shared.OpenPath(screenshotPath);
             new Thread(delegate ()
             {
                 try

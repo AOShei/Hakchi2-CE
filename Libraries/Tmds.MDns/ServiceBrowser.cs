@@ -1,0 +1,372 @@
+﻿// This file is part of Tmds.MDns which is released under MIT.
+// See file LICENSE for full license details.
+
+using System;
+using System.Collections.Generic;
+using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Linq;
+
+namespace Tmds.MDns
+{
+    public class ServiceBrowser
+    {
+        public ServiceBrowser()
+        {
+            QueryParameters = new QueryParameters();
+            Services = new ReadOnlyCollectionWrapper<ServiceAnnouncement>(_services);
+        }
+
+        public void StartBrowse(string serviceType, SynchronizationContext synchronizationContext)
+        {
+            StartBrowse(new[] { serviceType }, synchronizationContext);
+        }
+
+        public void StartBrowse(IEnumerable<string> serviceTypes, SynchronizationContext synchronizationContext)
+        {
+            if (IsBrowsing)
+            {
+                throw new Exception("Already browsing");
+            }
+            _serviceTypes.AddRange(serviceTypes);
+            StartBrowsing(synchronizationContext);
+        }
+
+        public void StopBrowse()
+        {
+            if (!IsBrowsing)
+            {
+                return;
+            }
+            IsBrowsing = false;
+
+            NetworkChange.NetworkAddressChanged -= _networkAddressChangedEventHandler;
+            NetworkChange.NetworkAvailabilityChanged -= _networkAvailabilityChangedEventHandler;
+
+            lock (_interfaceHandlers)
+            {
+                foreach (var interfaceHandler in _interfaceHandlers.Values)
+                {
+                    interfaceHandler.Disable();
+                    OnNetworkInterfaceRemoved(interfaceHandler.NetworkInterface);
+                }
+                _interfaceHandlers = null;
+            }
+            _serviceTypes.Clear();
+            SynchronizationContext = null;
+        }
+
+        public void StartBrowse(IEnumerable<string> serviceTypes, bool useSynchronizationContext = true)
+        {
+            if (useSynchronizationContext)
+            {
+                StartBrowse(serviceTypes, SynchronizationContext.Current);
+            }
+            else
+            {
+                StartBrowse(serviceTypes, null);
+            }
+        }
+
+        public void StartBrowse(string serviceType, bool useSynchronizationContext = true)
+        {
+            StartBrowse(new[] { serviceType }, useSynchronizationContext);
+        }
+
+        public QueryParameters QueryParameters { get; private set; }
+        public SynchronizationContext SynchronizationContext { get; set; }
+        public bool IsBrowsing { get; private set; }
+        public ICollection<ServiceAnnouncement> Services { private set; get; }
+
+        /// <summary>
+        /// Also report services that respond from an address outside the local network of the receiving interface.
+        /// Such services may not be reachable from this host. Must be set before browsing starts.
+        /// </summary>
+        public bool IncludeNonLocalServices
+        {
+            get => _includeNonLocalServices;
+            set
+            {
+                if (IsBrowsing)
+                {
+                    throw new InvalidOperationException($"{nameof(IncludeNonLocalServices)} cannot be changed while browsing.");
+                }
+                if (value && !IsPacketInformationSupported)
+                {
+                    throw new PlatformNotSupportedException($"{nameof(IncludeNonLocalServices)} requires IPPacketInformation.Interface, which is only supported on Windows and Linux.");
+                }
+                _includeNonLocalServices = value;
+            }
+        }
+
+        // IPPacketInformation.Interface is only filled in on Windows and Linux.
+        private static bool IsPacketInformationSupported =>
+            RuntimeInformation.IsOSPlatform(OSPlatform.Windows) || RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+
+        public event EventHandler<ServiceAnnouncementEventArgs> ServiceAdded;
+        public event EventHandler<ServiceAnnouncementEventArgs> ServiceRemoved;
+        public event EventHandler<ServiceAnnouncementEventArgs> ServiceChanged;
+        public event EventHandler<NetworkInterfaceEventArgs> NetworkInterfaceAdded;
+        public event EventHandler<NetworkInterfaceEventArgs> NetworkInterfaceRemoved;
+
+        internal void OnServiceAdded(ServiceInfo service, Name serviceTypeName)
+        {
+            var announcement = new ServiceAnnouncement
+            {
+                Hostname = service.HostName.Labels[0],
+                Domain = service.HostName.SubName(1).ToString(),
+                Addresses = service.Addresses,
+                Instance = service.Name.Labels[0],
+                NetworkInterface = service.NetworkInterface,
+                Port = (ushort)service.Port,
+                Txt = service.Txt,
+                Type = StripLocalSuffix(serviceTypeName)
+            };
+            lock (_serviceAnnouncements)
+            {
+                _serviceAnnouncements.Add(Tuple.Create(service.NetworkInterface.Id, service.Name, serviceTypeName), announcement);
+            }
+            SynchronizationContextPost(o =>
+            {
+                lock (Services)
+                {
+                    _services.Add(announcement);
+                }
+                if (ServiceAdded != null)
+                {
+                    ServiceAdded(this, new ServiceAnnouncementEventArgs(announcement));
+                }
+            });
+        }
+
+        internal void OnServiceRemoved(ServiceInfo service, Name serviceTypeName)
+        {
+            var key = Tuple.Create(service.NetworkInterface.Id, service.Name, serviceTypeName);
+            ServiceAnnouncement announcement;
+            lock (_serviceAnnouncements)
+            {
+                announcement = _serviceAnnouncements[key];
+                _serviceAnnouncements.Remove(key);
+            }
+            SynchronizationContextPost(o =>
+            {
+                announcement.IsRemoved = true;
+                lock (Services)
+                {
+                    _services.Remove(announcement);
+                }
+                if (ServiceRemoved != null)
+                {
+                    ServiceRemoved(this, new ServiceAnnouncementEventArgs(announcement));
+                }
+            });
+        }
+
+        void OnNetworkInterfaceAdded(NetworkInterface networkInterface)
+        {
+            SynchronizationContextPost(o =>
+            {
+                if (NetworkInterfaceAdded != null)
+                {
+                    NetworkInterfaceAdded(this, new NetworkInterfaceEventArgs(networkInterface));
+                }
+            });
+        }
+
+        void OnNetworkInterfaceRemoved(NetworkInterface networkInterface)
+        {
+            SynchronizationContextPost(o =>
+            {
+                if (NetworkInterfaceRemoved != null)
+                {
+                    NetworkInterfaceRemoved(this, new NetworkInterfaceEventArgs(networkInterface));
+                }
+            });
+        }
+
+        internal void OnServiceChanged(ServiceInfo service, Name serviceTypeName)
+        {
+            ServiceAnnouncement announcement;
+            lock (_serviceAnnouncements)
+            {
+                announcement = _serviceAnnouncements[Tuple.Create(service.NetworkInterface.Id, service.Name, serviceTypeName)];
+            }
+            var tmpAnnouncement = new ServiceAnnouncement()
+            {
+                Hostname = service.HostName.Labels[0],
+                Domain = service.HostName.SubName(1).ToString(),
+                Addresses = service.Addresses,
+                Instance = service.Name.Labels[0],
+                NetworkInterface = service.NetworkInterface,
+                Port = (ushort)service.Port,
+                Txt = service.Txt,
+                Type = StripLocalSuffix(serviceTypeName)
+            };
+            SynchronizationContextPost(o =>
+            {
+                announcement.Hostname = tmpAnnouncement.Hostname;
+                announcement.Domain = tmpAnnouncement.Domain;
+                announcement.Addresses = tmpAnnouncement.Addresses;
+                announcement.Instance = tmpAnnouncement.Instance;
+                announcement.NetworkInterface = tmpAnnouncement.NetworkInterface;
+                announcement.Port = tmpAnnouncement.Port;
+                announcement.Txt = tmpAnnouncement.Txt;
+                announcement.Type = tmpAnnouncement.Type;
+                if (ServiceChanged != null)
+                {
+                    ServiceChanged(this, new ServiceAnnouncementEventArgs(announcement));
+                }
+            });
+        }
+
+        private void StartBrowsing(SynchronizationContext synchronizationContext)
+        {
+            if (IsBrowsing)
+            {
+                return;
+            }
+            IsBrowsing = true;
+            SynchronizationContext = synchronizationContext;
+
+            Dictionary<int, NetworkInterfaceHandler> interfaceHandlers = new Dictionary<int, NetworkInterfaceHandler>();
+            _interfaceHandlers = interfaceHandlers;
+            _networkAddressChangedEventHandler = (s, e) =>
+            {
+                CheckNetworkInterfaceStatuses(interfaceHandlers);
+            };
+            NetworkChange.NetworkAddressChanged += _networkAddressChangedEventHandler;
+
+            _networkAvailabilityChangedEventHandler = (s, e) =>
+            {
+                CheckNetworkInterfaceStatuses(interfaceHandlers);
+            };
+            NetworkChange.NetworkAvailabilityChanged += _networkAvailabilityChangedEventHandler;
+
+            CheckNetworkInterfaceStatuses(interfaceHandlers);
+        }
+
+        /// <summary>
+        /// Re-enumerates the network interfaces and refreshes their handlers, as a network change
+        /// event would. Lets callers poll on platforms where NetworkChange events are missed or
+        /// arrive before an interface has its addresses (e.g. a USB network gadget on Mono/Linux).
+        /// </summary>
+        public void RefreshNetworkInterfaces()
+        {
+            var interfaceHandlers = _interfaceHandlers;
+            if (!IsBrowsing || interfaceHandlers == null)
+            {
+                return;
+            }
+            CheckNetworkInterfaceStatuses(interfaceHandlers);
+        }
+
+        private void CheckNetworkInterfaceStatuses(Dictionary<int, NetworkInterfaceHandler> interfaceHandlers)
+        {
+            lock (interfaceHandlers)
+            {
+                if (interfaceHandlers != _interfaceHandlers)
+                {
+                    return;
+                }
+
+                HashSet<NetworkInterfaceHandler> handlers = new HashSet<NetworkInterfaceHandler>(_interfaceHandlers.Values);
+                NetworkInterface[] networkInterfaces = Array.Empty<NetworkInterface>();
+                try
+                {
+                    networkInterfaces = NetworkInterface.GetAllNetworkInterfaces();
+                }
+                catch
+                {
+                    // Before .NET 11, GetAllNetworkInterfaces can throw when an interface disappears during enumeration (https://github.com/dotnet/runtime/issues/49515).                                                                                                                         
+                    // The next network change event will retry.
+                    return;
+                }
+
+                foreach (NetworkInterface networkInterface in networkInterfaces)
+                {
+                    if (networkInterface.NetworkInterfaceType == NetworkInterfaceType.Tunnel)
+                    {
+                        continue;
+                    }
+                    if (!networkInterface.SupportsMulticast)
+                    {
+                        continue;
+                    }
+
+                    int key;
+                    NetworkInterfaceHandler interfaceHandler;
+                    try
+                    {
+                        var hasIPv4 = networkInterface.Supports(NetworkInterfaceComponent.IPv4);
+                        var hasIPv6 = networkInterface.Supports(NetworkInterfaceComponent.IPv6);
+
+                        if (!hasIPv4 && !hasIPv6)
+                        {
+                            continue;
+                        }
+
+                        key = hasIPv4 ? networkInterface.GetIPProperties().GetIPv4Properties().Index
+                                      : networkInterface.GetIPProperties().GetIPv6Properties().Index;
+                    }
+                    // Mono does not support IPv6 properties and always throws NotImplementedException.
+                    catch (NotImplementedException)
+                    {
+                        continue;
+                    }
+
+                    _interfaceHandlers.TryGetValue(key, out interfaceHandler);
+                    if (interfaceHandler == null)
+                    {
+                        interfaceHandler = new NetworkInterfaceHandler(this, key, networkInterface, _serviceTypes.Select(st => new Name(st.ToLower() + ".local.")));
+                        _interfaceHandlers.Add(key, interfaceHandler);
+                        OnNetworkInterfaceAdded(networkInterface);
+                    }
+                    // Linux reports "unknown" for interfaces without carrier detection (USB network
+                    // gadgets, tun/tap, some virtual NICs); they are usable, so treat them as up.
+                    if (networkInterface.OperationalStatus == OperationalStatus.Up ||
+                        networkInterface.OperationalStatus == OperationalStatus.Unknown)
+                    {
+                        interfaceHandler.Refresh(networkInterface);
+                    }
+                    else
+                    {
+                        interfaceHandler.Disable();
+                    }
+                    handlers.Remove(interfaceHandler);
+                }
+                foreach (NetworkInterfaceHandler handler in handlers)
+                {
+                    _interfaceHandlers.Remove(handler.Key);
+                    handler.Disable();
+                    OnNetworkInterfaceRemoved(handler.NetworkInterface);
+                }
+            }
+        }
+
+        private void SynchronizationContextPost(SendOrPostCallback cb)
+        {
+            if (SynchronizationContext != null)
+            {
+                SynchronizationContext.Post(cb, null);
+            }
+            else
+            {
+                cb(null);
+            }
+        }
+
+        private static string StripLocalSuffix(Name name)
+        {
+            return name.SubName(0, name.Labels.Count - 2).ToString();
+        }
+
+        private readonly HashSet<ServiceAnnouncement> _services = new HashSet<ServiceAnnouncement>();
+        private readonly Dictionary<Tuple<string, Name, Name>, ServiceAnnouncement> _serviceAnnouncements = new Dictionary<Tuple<string, Name, Name>, ServiceAnnouncement>();
+        private Dictionary<int, NetworkInterfaceHandler> _interfaceHandlers;
+        NetworkAddressChangedEventHandler _networkAddressChangedEventHandler;
+        NetworkAvailabilityChangedEventHandler _networkAvailabilityChangedEventHandler;
+        private List<string> _serviceTypes = new List<string>();
+        private bool _includeNonLocalServices;
+    }
+}
